@@ -24,8 +24,12 @@ for file in glob.glob(os.path.join(path, "*.fits")):
     curveData['REL_FLUX'] = curveData['PDCSAP_FLUX'].div(fluxMed)
     curveData['REL_FLUX_ERR'] = curveData['PDCSAP_FLUX_ERR'].div(fluxMed)
 
+    # Plot with various axes and scales.
+    plt.figure(figsize=(16, 12))
+
     # matplotlib graphing
     print("Generating light curve.")
+    plt.subplot(221)
     plt.scatter(curveData['TIME'], curveData['REL_FLUX'], color='tab:purple', s=.1)
     plt.xlabel('BJD - 2457000 (days)')  # BJD Julian corrected for elliptical orbit.
     plt.ylabel('Relative Flux')
@@ -33,24 +37,25 @@ for file in glob.glob(os.path.join(path, "*.fits")):
 
     i += 1
     figName = objName + '.png'
-    plt.savefig(os.path.join('curves', figName), orientation='landscape')
-    plt.clf()
+    # plt.savefig(os.path.join('curves', figName), orientation='landscape')
+    # plt.clf()
 
     # Lomb-Scargle Periodograms
-    print("Generating periodogram.")
+    print("Generating Lomb-Scargle periodogram.")
     LS = LombScargle(curveData['TIME'], curveData['REL_FLUX'])  # , curveData['REL_FLUX_ERR'])
     frequency, power = LS.autopower(minimum_frequency=1 / 27, maximum_frequency=1 / .1)
     best_frequency = frequency[np.argmax(power)]
 
     LSmodel = LS.model(curveData['TIME'], best_frequency)
+    plt.subplot(222)
     plt.plot(1 / frequency, power)
     plt.scatter(1 / best_frequency, np.max(power), c='C1')
     plt.xlabel('Period')
-    plt.xscale('log')
+    # plt.xscale('log')
     plt.ylabel('Power')
-    plt.title('Periodogram for ' + objName)
-    plt.savefig(os.path.join('powerSpectrum', figName), orientation='landscape')
-    plt.clf()
+    plt.title('Lomb-Scargle for ' + objName)
+    # plt.savefig(os.path.join('lombScargle', figName), orientation='landscape')
+    # plt.clf()
 
     # Graph best fit
     # plt.plot(curveData['TIME'], LSmodel,
@@ -59,6 +64,7 @@ for file in glob.glob(os.path.join(path, "*.fits")):
     # plt.clf()
 
     # Autocorrelation Function using exoplanet.
+    print("Generating ACF periodogram.")
     acf = xo.autocorr_estimator(curveData['TIME'].values, curveData['REL_FLUX'].values,
                                 yerr=curveData['REL_FLUX_ERR'].values,
                                 min_period=0.1, max_period=27, max_peaks=10)
@@ -76,16 +82,37 @@ for file in glob.glob(os.path.join(path, "*.fits")):
     # #print(acfBestPeriod)
     # print(acfBestPower)
 
-    plt.figure(figsize=(12, 9))
+    # plt.figure(figsize=(12, 9))
+    plt.subplot(223)
     plt.plot(acfPeriod, acfPower)
     plt.scatter(acfBestPeriod, acfBestPower, c='C1')
     # plt.errorbar(curveData['TIME'], curveData['REL_FLUX'], yerr=curveData['REL_FLUX_ERR'], linestyle=None, alpha=0.15, label='PDC_FLUX')
-    plt.xlabel('Period')  # BJD Julian corrected for elliptical orbit.
+    plt.xlabel('Period')
     plt.ylabel('AutoCorr Power')
     plt.title('ACF for ' + objName)
-    plt.savefig(os.path.join('acf', figName), orientation='landscape')
+    # plt.savefig(os.path.join('acf', figName), orientation='landscape')
+    # plt.close()
+
+    # Box Least Squares
+    print("Generating BLS periodogram.")
+    model = BoxLeastSquares(curveData['TIME'].values, curveData['REL_FLUX'].values,
+                            dy=curveData['REL_FLUX_ERR'].values)
+    periodogram = model.power(period=acfPeriod[100:], duration=[0.05], objective='snr')
+    BLSmaxPower = np.max(periodogram.power)
+    BLSbestPeriod = periodogram.period[np.argmax(periodogram.power)]
+    plt.subplot(224)
+    plt.plot(periodogram.period, periodogram.power)
+    plt.scatter(BLSbestPeriod, BLSmaxPower, c='C1')
+    plt.xlabel('Period')
+    plt.ylabel('Power')
+    plt.title('BLS for ' + objName)
+    # plt.savefig(os.path.join('bls', figName), orientation='landscape')
+    plt.savefig(os.path.join('plots', figName), orientation='landscape')
+
+    # Adjust the subplot layout
+    plt.subplots_adjust(top=0.92, bottom=0.10, left=0.10, right=0.95, hspace=1,
+                        wspace=1)
     plt.close()
-    # plt.clf()
 
     # Downsampling to prep for Altair graphing
     # Convert time into the necessary time series format for resampling.
