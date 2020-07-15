@@ -3,6 +3,8 @@ import os
 import altair as alt
 import pandas as pd
 import numpy as np
+from scipy import stats
+import math
 import exoplanet as xo
 import matplotlib.pyplot as plt
 from astropy.io import fits
@@ -10,51 +12,46 @@ from astropy.table import Table
 from astropy.timeseries import LombScargle, BoxLeastSquares
 
 
-def classification(acfBP, blsBP, acfMP, lsMP, blsMP):
-    ratio = acfBP / blsBP
+def classification(acfMP, lsMP, blsMP, sd):
     result = ''
 
-    if ((round(ratio, 2) == 1) or (
-            round(ratio / 2, 2) == 1)) and lsMP < 0.25 and acfMP > 0.1:  # Ratios of 1 or 2 correlated to EBs.
-        if blsMP > 1000:
-            result = 'Preliminary Classification: EB'
-            print(objName + ' IS CLASSIFIED AS AN ECLIPSING BINARY****')
-
-        # if blsMP > 1000:
-        #     if blsMP > 200:
-        #         result = 'Preliminary Classification: EB'
-        #         print(objName + ' IS CLASSIFIED AS AN ECLIPSING BINARY****')
-        # else:
-        #         if blsMP > 50 or lsMP > 0.65:
-        #             result = 'Preliminary Classification: Possible EB'
-        #             print(objName + ' NEEDS INSPECTED*************************')
-        #         else:
-        #             result = 'Preliminary Classification: Not EB'
+    # Identify significant eclipses
+    if (sd >= 6 and blsMP > 50) or (sd >= 5 and blsMP > 500):
+        result = 'Preliminary Classification: EB, SD: ' + str(sd)
+        print(objName + ' IS CLASSIFIED AS AN ECLIPSING BINARY****')
+        return result
+    elif sd >= 4 and lsMP > .2 and acfMP > .2:  # Add constraints to less significant eclipses
+        result = 'Preliminary Classification: EB, SD: ' + str(sd)
+        print(objName + ' IS CLASSIFIED AS AN ECLIPSING BINARY****')
+        return result
+    elif blsMP > 1000:
+        result = 'Preliminary Classification: EB, SD: ' + str(sd)
+        print(objName + ' IS CLASSIFIED AS AN ECLIPSING BINARY****')
+        return result
 
     return result
 
 
-def lombscargle(name, index, time, relFlux):
+def smoothing(time, relFlux, period):
+    amp = relFlux[relFlux.where(relFlux > 1)].mean()
+    omega = 2 * math.pi / period
+    antiWave = np.sin(time.multiply(omega)).multiply(amp)
+    print(len(relFlux))
+    print(len(time))
+    return relFlux.subtract(antiWave)
+
+
+def lombscargle(time, relFlux):
     LS = LombScargle(time, relFlux)
     frequency, power = LS.autopower(minimum_frequency=1 / 27, maximum_frequency=1 / .1)
     bestPeriod = 1 / frequency[np.argmax(power)]
     maxPower = np.max(power)
     period = 1 / frequency
 
-    # plt.plot(period, power)
-    # plt.scatter(bestPeriod, maxPower, c='C1')
-    # plt.text(bestPeriod, maxPower, 'Per: ' + str(bestPeriod))
-    # plt.xlabel('Period')
-    # plt.ylabel('AutoCorr Power')
-    # plt.title('LS for ' + name)
-    # figName = name + '_' + str(index) + '.png'
-    # plt.savefig(os.path.join('ls', figName), orientation='landscape')
-    # plt.close()
-
     return period, power, bestPeriod, maxPower
 
 
-def autocorrelationfn(name, index, time, relFlux, relFluxErr):
+def autocorrelationfn(time, relFlux, relFluxErr):
     acf = xo.autocorr_estimator(time.values, relFlux.values, yerr=relFluxErr.values,
                                 min_period=0.1, max_period=27, max_peaks=10)
 
@@ -64,16 +61,6 @@ def autocorrelationfn(name, index, time, relFlux, relFluxErr):
     acfPowerPd = pd.DataFrame(power)
     acfLocalMaxima = acfPowerPd[(acfPowerPd.shift(1) < acfPowerPd) & (acfPowerPd.shift(-1) < acfPowerPd)]
     maxPower = np.max(acfLocalMaxima).values
-
-    # plt.plot(period, power)
-    # #plt.scatter(bestPeriod, maxPower, c='C1')
-    # #plt.text(bestPeriod, maxPower, 'Per: ' + str(bestPeriod))
-    # plt.xlabel('Period')
-    # plt.ylabel('AutoCorr Power')
-    # plt.title('ACF for ' + name)
-    # figName = name + '_' + str(index) + '.png'
-    # plt.savefig(os.path.join('acf', figName), orientation='landscape')
-    # plt.close()
 
     bestPeriod = period[np.where(power == maxPower)[0]][0]
     peaks = acf['peaks'][0]['period']
@@ -86,7 +73,7 @@ def autocorrelationfn(name, index, time, relFlux, relFluxErr):
     return period, power, bestPeriod, maxPower, window
 
 
-def boxleastsquares(name, index, time, relFlux, relFluxErr):
+def boxleastsquares(time, relFlux, relFluxErr):
     model = BoxLeastSquares(time.values, relFlux.values, dy=relFluxErr.values)
     duration = [40 / 1440, 80 / 1440]
     periodogram = model.power(period=acfPeriod[np.where(acfPeriod > np.max(duration))[0]], duration=duration,
@@ -96,23 +83,12 @@ def boxleastsquares(name, index, time, relFlux, relFluxErr):
     maxPower = np.max(periodogram.power)
     bestPeriod = periodogram.period[np.argmax(periodogram.power)]
 
-    # plt.plot(period, power)
-    # plt.scatter(bestPeriod, maxPower, c='C1')
-    # plt.text(bestPeriod, maxPower, 'Per: ' + str(bestPeriod))
-    # plt.xlabel('Period')
-    # plt.ylabel('AutoCorr Power')
-    # plt.title('BLS for ' + name)
-    # figName = name + '_' + str(index) + '.png'
-    # plt.savefig(os.path.join('bls', figName), orientation='landscape')
-    # plt.close()
-
     return period, power, bestPeriod, maxPower
 
 
 numTab = 11  # We have 11 fits files to read from.
 lightCurves = [0] * numTab  # Store the light curves for all the tables.
 path = "data"  # Hack for dealing with OS forward/back slash conflicts.
-i = 0
 EBs = []  # Store the objects classified as eclipsing binaries
 
 for file in glob.glob(os.path.join(path, "*.fits")):
@@ -122,101 +98,107 @@ for file in glob.glob(os.path.join(path, "*.fits")):
     curveTable = Table(fitsTable[1].data).to_pandas()
     curveData = curveTable.loc[curveTable['QUALITY'] == 0].dropna(subset=['TIME']).dropna(subset=['PDCSAP_FLUX']).copy()
     fluxMed = np.nanmedian(curveData['PDCSAP_FLUX'])
-    time = curveData['TIME']
-    relFlux = curveData['PDCSAP_FLUX'].div(fluxMed)
-    relFluxErr = curveData['PDCSAP_FLUX_ERR'].div(fluxMed)
+    curveData['REL_FLUX'] = curveData['PDCSAP_FLUX'].div(fluxMed)
+    curveData['REL_FLUX_ERR'] = curveData['PDCSAP_FLUX_ERR'].div(fluxMed)
 
-    # Plot with various axes and scales.
-    plt.figure(figsize=(16, 18))
+    # Calculate z-score of all points, find outliers below the flux midpoint.
+    z = np.abs(stats.zscore(curveData['REL_FLUX']))
+    potentialEclipses = z[np.where(curveData['REL_FLUX'] < 1)[0]]
+    maxSD = math.floor(np.max(potentialEclipses))
 
-    i += 1
-    figName = objName + '.png'
-
-    # Classify & Smooth
+    # Classify based on outliers
     title = ''
-    j = 0
-    while title == '':
+
+    if maxSD < 3:
+        plt.figure()
+        figName = objName + '.png'
+        title = 'Preliminary Classification: Not EB, Max SD: ' + str(maxSD)
+
         # Graph the light curve
-        if j == 0:
-            print("Generating light curve.")
-            plt.subplot(324)
-            plt.scatter(time, relFlux, color='tab:purple', s=.1)
-            plt.xlabel('BJD - 2457000 (days)')  # BJD Julian corrected for elliptical orbit.
-            plt.ylabel('Relative Flux')
-            plt.title('Light Curve for ' + objName)
-        else:
-            if j == 1:
-                print("Generating smoothed 1x light curve.")
-                plt.subplot(325)
-                plt.scatter(time, relFlux, color='tab:purple', s=.1)
-                plt.xlabel('BJD - 2457000 (days)')  # BJD Julian corrected for elliptical orbit.
-                plt.ylabel('Relative Flux')
-                plt.title('Light Curve for ' + objName)
-            else:
-                print("Generating smoothed 1x light curve.")
-                plt.subplot(326)
-                plt.scatter(time, relFlux, color='tab:purple', s=.1)
-                plt.xlabel('BJD - 2457000 (days)')  # BJD Julian corrected for elliptical orbit.
-                plt.ylabel('Relative Flux')
-                plt.title('Light Curve for ' + objName)
+        print("Generating light curve.")
+        plt.scatter(curveData['TIME'], curveData['REL_FLUX'], color='tab:purple', s=.1)
+        plt.xlabel('BJD - 2457000 (days)')  # BJD Julian corrected for elliptical orbit.
+        plt.ylabel('Relative Flux')
+        plt.title('Light Curve for ' + objName)
+
+        # Save figure
+        plt.suptitle(title)
+        plt.savefig(os.path.join('notEB', figName), orientation='landscape')
+    else:
+        # Figure to contain light curve and LS, ACF, and BLS periodograms.
+        plt.figure(figsize=(16, 12))
+        figName = objName + '.png'
+
+        # Graph the light curve
+        plt.subplot(221)
+        print("Generating light curve.")
+        plt.scatter(curveData['TIME'], curveData['REL_FLUX'], color='tab:purple', s=.1)
+        plt.xlabel('BJD - 2457000 (days)')  # BJD Julian corrected for elliptical orbit.
+        plt.ylabel('Relative Flux')
+        plt.title('Light Curve for ' + objName)
 
         # Lomb-Scargle Periodograms
         print("Generating Lomb-Scargle periodogram.")
-        LSperiod, LSpower, LSbestPeriod, LSmaxPower = lombscargle(objName, j, time, relFlux)
+        LSperiod, LSpower, LSbestPeriod, LSmaxPower = lombscargle(curveData['TIME'], curveData['REL_FLUX'])
 
         # Autocorrelation Function using exoplanet.
         print("Generating ACF periodogram.")
-        acfPeriod, acfPower, acfBestPeriod, acfMaxPower, s_window = autocorrelationfn(objName, j, time, relFlux, relFluxErr)
+        acfPeriod, acfPower, acfBestPeriod, acfMaxPower, s_window = autocorrelationfn(curveData['TIME'],
+                                                                                      curveData['REL_FLUX'],
+                                                                                      curveData['REL_FLUX_ERR'])
 
         # Box Least Squares
         print("Generating BLS periodogram.")
-        BLSperiod, BLSpower, BLSbestPeriod, BLSmaxPower = boxleastsquares(objName, j, time, relFlux, relFluxErr)
+        BLSperiod, BLSpower, BLSbestPeriod, BLSmaxPower = boxleastsquares(curveData['TIME'], curveData['REL_FLUX'],
+                                                                          curveData['REL_FLUX_ERR'])
 
         # Run classification
-        title = classification(acfBestPeriod, BLSbestPeriod, acfMaxPower, LSmaxPower, BLSmaxPower)
+        title = classification(acfMaxPower, LSmaxPower, BLSmaxPower, maxSD)
 
-        if title == 'Preliminary Classification: EB':
-            EBs.append(objName)
-        else:
-            print("Performing smoothing on " + objName)
-            relFlux = relFlux.rolling(s_window, center=True).median() / fluxMed
-            relFluxErr = relFluxErr.rolling(s_window, center=True).median() / fluxMed
+        # Plot LS/ACF/BLS Fns
 
-        if j == 3:
-            title = 'Preliminary Classification: Not EB'
-        j += 1
+        # LS
+        plt.subplot(222)
+        plt.plot(LSperiod, LSpower)
+        plt.scatter(LSbestPeriod, LSmaxPower, c='C1')
+        plt.text(LSbestPeriod, LSmaxPower, 'Per: ' + str(LSbestPeriod))
+        plt.xlabel('Period')
+        plt.ylabel('Power')
+        plt.title('Lomb-Scargle for ' + objName)
 
-    # Plot final LS/ACF/BLS Fns
+        # ACF
+        plt.subplot(223)
+        plt.plot(acfPeriod, acfPower)
+        plt.scatter(acfBestPeriod, acfMaxPower, c='C1')
+        plt.text(acfBestPeriod, acfMaxPower, 'Per: ' + str(acfBestPeriod))
+        plt.xlabel('Period')
+        plt.ylabel('AutoCorr Power')
+        plt.title('ACF for ' + objName)
 
-    # LS
-    plt.subplot(321)
-    plt.plot(LSperiod, LSpower)
-    plt.scatter(LSbestPeriod, LSmaxPower, c='C1')
-    plt.text(LSbestPeriod, LSmaxPower, 'Per: ' + str(LSbestPeriod))
-    plt.xlabel('Period')
-    plt.ylabel('Power')
-    plt.title('Lomb-Scargle for ' + objName)
+        # BLS
+        plt.subplot(224)
+        plt.plot(BLSperiod, BLSpower)
+        plt.scatter(BLSbestPeriod, BLSmaxPower, c='C1')
+        plt.text(BLSbestPeriod, BLSmaxPower, 'Per: ' + str(BLSbestPeriod))
+        plt.xlabel('Period')
+        plt.ylabel('Power')
+        plt.title('BLS for ' + objName)
 
-    # ACF
-    plt.subplot(322)
-    plt.plot(acfPeriod, acfPower)
-    plt.scatter(acfBestPeriod, acfMaxPower, c='C1')
-    plt.text(acfBestPeriod, acfMaxPower, 'Per: ' + str(acfBestPeriod))
-    plt.xlabel('Period')
-    plt.ylabel('AutoCorr Power')
-    plt.title('ACF for ' + objName)
+    if title == 'Preliminary Classification: EB, SD: ' + str(maxSD):
+        EBs.append(objName)
 
-    # BLS
-    plt.subplot(323)
-    plt.plot(BLSperiod, BLSpower)
-    plt.scatter(BLSbestPeriod, BLSmaxPower, c='C1')
-    plt.text(BLSbestPeriod, BLSmaxPower, 'Per: ' + str(BLSbestPeriod))
-    plt.xlabel('Period')
-    plt.ylabel('Power')
-    plt.title('BLS for ' + objName)
+        # Save figure
+        plt.suptitle(title)
+        plt.savefig(os.path.join('EB', figName), orientation='landscape')
+
+    if title == '':
+        title = 'Preliminary Classification: Not EB, Max SD: ' + str(maxSD)
+
+        # Save figure
+        plt.suptitle(title)
+        plt.savefig(os.path.join('notEB', figName), orientation='landscape')
 
     # Save figure
-    plt.suptitle(title)
     plt.savefig(os.path.join('plots', figName), orientation='landscape')
     plt.close()
 
