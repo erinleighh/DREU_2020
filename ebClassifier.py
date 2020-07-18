@@ -12,19 +12,11 @@ from astropy.table import Table
 from astropy.timeseries import LombScargle, BoxLeastSquares
 
 
-def classification(acfMP, lsMP, blsMP, sd):
-    result = ''
+def classification(blsMP, sd):
+    result = 'Unclassified'
 
     # Identify significant eclipses
-    if (sd >= 6 and blsMP > 50) or (sd >= 5 and blsMP > 500):
-        result = 'Preliminary Classification: EB, SD: ' + str(sd)
-        print(objName + ' IS CLASSIFIED AS AN ECLIPSING BINARY****')
-        return result
-    elif sd >= 4 and lsMP > .2 and acfMP > .2:  # Add constraints to less significant eclipses
-        result = 'Preliminary Classification: EB, SD: ' + str(sd)
-        print(objName + ' IS CLASSIFIED AS AN ECLIPSING BINARY****')
-        return result
-    elif blsMP > 1000:
+    if (sd >= 7 and blsMP > 100) or (sd >= 5 and blsMP > 500):
         result = 'Preliminary Classification: EB, SD: ' + str(sd)
         print(objName + ' IS CLASSIFIED AS AN ECLIPSING BINARY****')
         return result
@@ -32,13 +24,13 @@ def classification(acfMP, lsMP, blsMP, sd):
     return result
 
 
-def smoothing(time, relFlux, period):
-    amp = relFlux[relFlux.where(relFlux > 1)].mean()
-    omega = 2 * math.pi / period
-    antiWave = np.sin(time.multiply(omega)).multiply(amp)
-    print(len(relFlux))
-    print(len(time))
-    return relFlux.subtract(antiWave)
+def findsd(relFlux, medianFlux):
+    # Calculate z-score of all points, find outliers below the flux midpoint.
+    z = np.abs(stats.zscore(relFlux))
+    potentialEclipses = z[np.where(relFlux < min(1, medianFlux))[0]]
+    maximumSD = math.floor(np.max(potentialEclipses))
+
+    return maximumSD
 
 
 def lombscargle(time, relFlux):
@@ -78,7 +70,7 @@ def boxleastsquares(time, relFlux, relFluxErr):
     duration = [40 / 1440, 80 / 1440]
     periodogram = model.power(period=acfPeriod[np.where(acfPeriod > np.max(duration))[0]], duration=duration,
                               objective='snr')
-    period = periodogram.period
+    period = periodogram.periods
     power = periodogram.power
     maxPower = np.max(periodogram.power)
     bestPeriod = periodogram.period[np.argmax(periodogram.power)]
@@ -86,8 +78,7 @@ def boxleastsquares(time, relFlux, relFluxErr):
     return period, power, bestPeriod, maxPower
 
 
-numTab = 11  # We have 11 fits files to read from.
-lightCurves = [0] * numTab  # Store the light curves for all the tables.
+lightCurves = []  # Initialize the array holding light curves
 path = "data"  # Hack for dealing with OS forward/back slash conflicts.
 EBs = []  # Store the objects classified as eclipsing binaries
 
@@ -101,106 +92,186 @@ for file in glob.glob(os.path.join(path, "*.fits")):
     curveData['REL_FLUX'] = curveData['PDCSAP_FLUX'].div(fluxMed)
     curveData['REL_FLUX_ERR'] = curveData['PDCSAP_FLUX_ERR'].div(fluxMed)
 
-    # Calculate z-score of all points, find outliers below the flux midpoint.
-    z = np.abs(stats.zscore(curveData['REL_FLUX']))
-    potentialEclipses = z[np.where(curveData['REL_FLUX'] < 1)[0]]
-    maxSD = math.floor(np.max(potentialEclipses))
+    originalFlux = curveData['REL_FLUX'].copy()
+    originalTime = curveData['TIME'].copy()
+
+    title = 'Unclassified'
 
     # Classify based on outliers
-    title = ''
+    i = 0
+    while 'Unclassified' in title and i < 3:  # Potential to be an EB.
+        bottom, top = 0, 0
+        maxSD = findsd(curveData['REL_FLUX'], fluxMed)
 
-    if maxSD < 3:
-        plt.figure()
-        figName = objName + '.png'
-        title = 'Preliminary Classification: Not EB, Max SD: ' + str(maxSD)
+        if maxSD < 3:  # Not an obvious EB, unlikely to be an EB.
+            plt.figure()
+            if i == 0:
+                # Graph the light curve
+                figName = objName + '.png'
+                title = 'Preliminary Classification: Not EB, Max SD: ' + str(maxSD)
+                print("Generating light curve.")
+                plt.scatter(curveData['TIME'], curveData['REL_FLUX'], color='tab:purple', s=.1)
+                plt.xlabel('BJD - 2457000 (days)')  # BJD Julian corrected for elliptical orbit.
+                plt.ylabel('Relative Flux')
+                plt.title('Light Curve for ' + objName)
+            else:
+                plt.figure(figsize=(16, 12))
+                figName = objName + '_' + str(i) + '.png'
+                title = 'Preliminary Classification: Not EB, Max SD after ' + str(i) + 'x smoothing: ' + str(maxSD)
+                # Graph the light curve
+                print("Generating original light curve.")
+                plt.subplot(211)
+                plt.scatter(originalTime, originalFlux, color='tab:purple', s=.1)
+                plt.xlabel('BJD - 2457000 (days)')  # BJD Julian corrected for elliptical orbit.
+                plt.ylabel('Relative Flux')
+                bottom, top = plt.ylim()
+                plt.title('Light Curve for ' + objName)
 
-        # Graph the light curve
-        print("Generating light curve.")
-        plt.scatter(curveData['TIME'], curveData['REL_FLUX'], color='tab:purple', s=.1)
-        plt.xlabel('BJD - 2457000 (days)')  # BJD Julian corrected for elliptical orbit.
-        plt.ylabel('Relative Flux')
-        plt.title('Light Curve for ' + objName)
+                print('Generating smoothed ' + str(i) + 'x light curve.')
+                plt.subplot(212)
+                plt.xlabel('BJD - 2457000 (days)')  # BJD Julian corrected for elliptical orbit.
+                plt.ylabel('Relative Flux')
+                plt.scatter(curveData['TIME'], curveData['REL_FLUX'], color='tab:purple', s=.1)
+                plt.title('Smoothed ' + str(i) + 'x light curve for ' + objName)
+
+            # Save figure
+            plt.suptitle(title)
+            plt.savefig(os.path.join('notEB', figName), orientation='landscape')
+        else:
+            # Figure to contain light curve and LS, ACF, and BLS periodograms.
+            plt.figure(figsize=(16, 12))
+            figName = objName + '_' + str(i) + '.png'
+
+            if i == 0:
+                print("Generating light curve.")
+                plt.subplot(221)
+                plt.scatter(curveData['TIME'], curveData['REL_FLUX'], color='tab:purple', s=.1)
+                plt.xlabel('BJD - 2457000 (days)')  # BJD Julian corrected for elliptical orbit.
+                plt.ylabel('Relative Flux')
+                bottom, top = plt.ylim()
+                plt.title('Light Curve for ' + objName)
+            else:
+                print('Generating smoothed ' + str(i) + 'x light curve.')
+                plt.subplot(221)
+                plt.xlabel('BJD - 2457000 (days)')  # BJD Julian corrected for elliptical orbit.
+                plt.ylabel('Relative Flux')
+                bottom, top = plt.ylim()
+                plt.scatter(curveData['TIME'], curveData['REL_FLUX'], color='tab:purple', s=.1)
+                plt.title('Smoothed ' + str(i) + 'x light curve for ' + objName)
+
+            # Lomb-Scargle Periodograms
+            print("Generating Lomb-Scargle periodogram.")
+            LSperiod, LSpower, LSbestPeriod, LSmaxPower = lombscargle(curveData['TIME'], curveData['REL_FLUX'])
+
+            # Autocorrelation Function using exoplanet.
+            print("Generating ACF periodogram.")
+            acfPeriod, acfPower, acfBestPeriod, acfMaxPower, s_window = autocorrelationfn(curveData['TIME'],
+                                                                                          curveData['REL_FLUX'],
+                                                                                          curveData['REL_FLUX_ERR'])
+
+            # Box Least Squares
+            print("Generating BLS periodogram.")
+            BLSperiod, BLSpower, BLSbestPeriod, BLSmaxPower = boxleastsquares(curveData['TIME'], curveData['REL_FLUX'],
+                                                                              curveData['REL_FLUX_ERR'])
+
+            # Run classification
+            title = classification(BLSmaxPower, maxSD)
+
+            # Plot LS/ACF/BLS Fns
+
+            # LS
+            plt.subplot(222)
+            plt.plot(LSperiod, LSpower)
+            plt.scatter(LSbestPeriod, LSmaxPower, c='C1')
+            plt.text(LSbestPeriod, LSmaxPower, 'Per: ' + str(LSbestPeriod))
+            plt.xlabel('Period')
+            plt.ylabel('Power')
+            plt.title('Lomb-Scargle for ' + objName)
+
+            # ACF
+            plt.subplot(223)
+            plt.plot(acfPeriod, acfPower)
+            plt.scatter(acfBestPeriod, acfMaxPower, c='C1')
+            plt.text(acfBestPeriod, acfMaxPower, 'Per: ' + str(acfBestPeriod))
+            plt.xlabel('Period')
+            plt.ylabel('AutoCorr Power')
+            plt.title('ACF for ' + objName)
+
+            # BLS
+            plt.subplot(224)
+            plt.plot(BLSperiod, BLSpower)
+            plt.scatter(BLSbestPeriod, BLSmaxPower, c='C1')
+            plt.text(BLSbestPeriod, BLSmaxPower, 'Per: ' + str(BLSbestPeriod))
+            plt.xlabel('Period')
+            plt.ylabel('Power')
+            plt.title('BLS for ' + objName)
+
+            if 'Unclassified' in title:
+                title = 'Unclassified, Max SD: ' + str(maxSD)
+                # Perform Smoothing
+                print("Performing smoothing on " + objName)
+                smoothedFlux = curveData['REL_FLUX'].rolling(s_window, center=True).median()
+
+                SOK = np.isfinite(smoothedFlux)
+
+                newFlux = curveData['REL_FLUX'][SOK]-smoothedFlux[SOK]
+
+                curveData['REL_FLUX'] = newFlux.copy()
+
+                curveData = curveData.dropna(subset=['TIME']).dropna(subset=['REL_FLUX']).dropna(subset=['REL_FLUX_ERR']).copy()
+
+                fluxMed = np.nanmedian(curveData['REL_FLUX'])
+
+            if title == 'Preliminary Classification: EB, SD: ' + str(maxSD):
+                title = 'Preliminary Classification: EB, SD: ' + str(maxSD) + "\n" + file
+                EBs.append(objName)
+
+                # Save figure
+                plt.suptitle(title)
+                plt.savefig(os.path.join('EB', figName), orientation='landscape')
+
+                if i > 0:
+                    plt.figure(figsize=(16, 12))
+                    figName = objName + '.png'
+                    title = 'Preliminary Classification: EB, SD: ' + str(maxSD) + "\n" + file
+                    # Graph the light curve
+                    print("Generating original light curve.")
+                    plt.subplot(211)
+                    plt.scatter(originalTime, originalFlux, color='tab:purple', s=.1)
+                    plt.xlabel('BJD - 2457000 (days)')  # BJD Julian corrected for elliptical orbit.
+                    plt.ylabel('Relative Flux')
+                    bottom, top = plt.ylim()
+                    plt.title('Light Curve for ' + objName)
+
+                    plt.subplot(212)
+                    plt.xlabel('BJD - 2457000 (days)')  # BJD Julian corrected for elliptical orbit.
+                    plt.ylabel('Relative Flux')
+                    plt.scatter(curveData['TIME'], curveData['REL_FLUX'], color='tab:purple', s=.1)
+                    plt.title('Smoothed ' + str(i) + 'x light curve for ' + objName)
+                    plt.suptitle(title)
+                    plt.savefig(os.path.join('EB', figName), orientation='landscape')
+
+            i += 1
+
+            if 'Unclassified' in title and i == 3:
+                if maxSD < 4:
+                    title = 'Preliminary Classification: Not EB, Max SD after ' + str(i) + 'x smoothing: ' + str(
+                        maxSD)
+
+                    # Save figure
+                    plt.suptitle(title)
+                    plt.savefig(os.path.join('notEB', figName), orientation='landscape')
+                else:
+                    title = 'Preliminary Classification: Undetermined, Max SD: ' + str(maxSD)
+
+                    # Save figure
+                    plt.suptitle(title)
+                    plt.savefig(os.path.join('und', figName), orientation='landscape')
 
         # Save figure
         plt.suptitle(title)
-        plt.savefig(os.path.join('notEB', figName), orientation='landscape')
-    else:
-        # Figure to contain light curve and LS, ACF, and BLS periodograms.
-        plt.figure(figsize=(16, 12))
-        figName = objName + '.png'
-
-        # Graph the light curve
-        plt.subplot(221)
-        print("Generating light curve.")
-        plt.scatter(curveData['TIME'], curveData['REL_FLUX'], color='tab:purple', s=.1)
-        plt.xlabel('BJD - 2457000 (days)')  # BJD Julian corrected for elliptical orbit.
-        plt.ylabel('Relative Flux')
-        plt.title('Light Curve for ' + objName)
-
-        # Lomb-Scargle Periodograms
-        print("Generating Lomb-Scargle periodogram.")
-        LSperiod, LSpower, LSbestPeriod, LSmaxPower = lombscargle(curveData['TIME'], curveData['REL_FLUX'])
-
-        # Autocorrelation Function using exoplanet.
-        print("Generating ACF periodogram.")
-        acfPeriod, acfPower, acfBestPeriod, acfMaxPower, s_window = autocorrelationfn(curveData['TIME'],
-                                                                                      curveData['REL_FLUX'],
-                                                                                      curveData['REL_FLUX_ERR'])
-
-        # Box Least Squares
-        print("Generating BLS periodogram.")
-        BLSperiod, BLSpower, BLSbestPeriod, BLSmaxPower = boxleastsquares(curveData['TIME'], curveData['REL_FLUX'],
-                                                                          curveData['REL_FLUX_ERR'])
-
-        # Run classification
-        title = classification(acfMaxPower, LSmaxPower, BLSmaxPower, maxSD)
-
-        # Plot LS/ACF/BLS Fns
-
-        # LS
-        plt.subplot(222)
-        plt.plot(LSperiod, LSpower)
-        plt.scatter(LSbestPeriod, LSmaxPower, c='C1')
-        plt.text(LSbestPeriod, LSmaxPower, 'Per: ' + str(LSbestPeriod))
-        plt.xlabel('Period')
-        plt.ylabel('Power')
-        plt.title('Lomb-Scargle for ' + objName)
-
-        # ACF
-        plt.subplot(223)
-        plt.plot(acfPeriod, acfPower)
-        plt.scatter(acfBestPeriod, acfMaxPower, c='C1')
-        plt.text(acfBestPeriod, acfMaxPower, 'Per: ' + str(acfBestPeriod))
-        plt.xlabel('Period')
-        plt.ylabel('AutoCorr Power')
-        plt.title('ACF for ' + objName)
-
-        # BLS
-        plt.subplot(224)
-        plt.plot(BLSperiod, BLSpower)
-        plt.scatter(BLSbestPeriod, BLSmaxPower, c='C1')
-        plt.text(BLSbestPeriod, BLSmaxPower, 'Per: ' + str(BLSbestPeriod))
-        plt.xlabel('Period')
-        plt.ylabel('Power')
-        plt.title('BLS for ' + objName)
-
-    if title == 'Preliminary Classification: EB, SD: ' + str(maxSD):
-        EBs.append(objName)
-
-        # Save figure
-        plt.suptitle(title)
-        plt.savefig(os.path.join('EB', figName), orientation='landscape')
-
-    if title == '':
-        title = 'Preliminary Classification: Not EB, Max SD: ' + str(maxSD)
-
-        # Save figure
-        plt.suptitle(title)
-        plt.savefig(os.path.join('notEB', figName), orientation='landscape')
-
-    # Save figure
-    plt.savefig(os.path.join('plots', figName), orientation='landscape')
-    plt.close()
+        plt.savefig(os.path.join('plots', figName), orientation='landscape')
+        plt.close()
 
     # Downsampling to prep for Altair graphing
     # Convert time into the necessary time series format for resampling.
