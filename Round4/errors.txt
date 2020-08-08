@@ -1,1 +1,6 @@
 /astro/store/epyc2/projects2/tess/sector002/tess2018234235059-s0002-0000000260041674-0121-s_lc.fits
+/astro/store/epyc2/projects2/tess/sector013/tess2019169103026-s0013-0000000370041316-0146-s_lc.fits
+/astro/store/epyc2/projects2/tess/sector014/tess2019198215352-s0014-0000000199524189-0150-s_lc.fits
+/astro/store/epyc2/projects2/tess/sector015/tess2019226182529-s0015-0000000326259882-0151-s_lc.fits
+/astro/store/epyc2/projects2/tess/sector021/tess2020020091053-s0021-0000000233619795-0167-s_lc.fits
+/astro/store/epyc2/projects2/tess/sector021/tess2020020091053-s0021-0000000264217124-0167-s_lc.fits
