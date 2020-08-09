@@ -7,7 +7,7 @@ from astropy.io import fits
 from astropy.table import Table
 
 
-data = pd.read_csv('/astro/users/elhoward/DREU_2020/Round2/curvesTable.csv')
+data = pd.read_csv('curvesTable.csv')
 objects = data['Obj ID'].drop_duplicates()
 
 for obj in objects:
