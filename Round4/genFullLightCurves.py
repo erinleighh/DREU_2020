@@ -32,7 +32,7 @@ for obj in objects:
 
             for badDataPoint in idxL:
                 # Set data points to the right to null
-                r = range(badDataPoint + 1, badDataPoint + 1001)
+                r = range(badDataPoint + 1, badDataPoint + 501)
 
                 try:
                     curveData.loc[r, 'PDCSAP_FLUX'] = None
@@ -42,7 +42,7 @@ for obj in objects:
 
             for badDataPoint in idxR:
                 # Set data points to the left to null
-                l = range(badDataPoint - 1000, badDataPoint)
+                l = range(badDataPoint - 500, badDataPoint)
 
                 try:
                     curveData.loc[l, 'PDCSAP_FLUX'] = None
